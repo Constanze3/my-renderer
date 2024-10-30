@@ -190,7 +190,6 @@ int main(int argc, char** argv) {
     CreateAndRegisterWindow(hInstance);
     MSG msg;
 
-    render_once(pBits, win_width, win_height);
     InvalidateRect(hwnd, NULL, TRUE);
 
     RECT rect;
@@ -214,9 +213,8 @@ int main(int argc, char** argv) {
 
         
         float elapsed = std::chrono::duration_cast<milliseconds>(start - Clock::now()).count() / 1000.f;
-        render(pBits, win_width, 437, elapsed);
+        draw(pBits, win_width, 437, elapsed);
         InvalidateRect(hwnd, NULL, TRUE);
-        
     }
 
     return 0;

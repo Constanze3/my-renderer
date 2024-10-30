@@ -5,6 +5,39 @@
 #include <cassert>
 #include <array>
 
+#include "linear_algebra.h"
+
+void matrix_vector_multiplication(float* matrix, float* vector) {
+	float out[4] = {};
+
+	for (size_t i = 0; i < 4; i++) {
+		float row_sum = 0;
+		for (int j = 0; j < 4; j++) {
+			row_sum += matrix[i * 4 + j] * vector[j];
+		}
+
+		out[i] = row_sum;
+	}
+
+	for (size_t i = 0; i < 4; i++) {
+		vector[i] = out[i];
+	}
+}
+
+struct TriangleIndices {
+	size_t p1 = 0;
+	size_t p2 = 0;
+	size_t p3 = 0;
+
+	TriangleIndices(std::initializer_list<size_t> list) {
+		assert(list.size() == 3);
+
+		p1 = *list.begin();
+		p2 = *(list.begin() + 1);
+		p3 = *(list.begin() + 2);
+	}
+};
+
 struct Color {
 	uint8_t red;
 	uint8_t green;
@@ -12,7 +45,6 @@ struct Color {
 
 	Color(uint8_t red, uint8_t green, uint8_t blue) : red(red), green(green), blue(blue) {}
 };
-
 
 /// <summary>
 /// A buffer of BGR values.
@@ -35,24 +67,20 @@ struct Canvas {
 		pixel[1] = color.green;
 		pixel[2] = color.red;
 	}
+
+	void clear(Color color) const {
+		for (size_t x = 0; x < width; x++) {
+			for (size_t y = 0; y < height; y++) {
+				set_pixel_color(x, y, color);
+			}
+		}
+	}
 };
 
-void set_pixel_color(void* buffer, int width, int height, int x, int y, Color color) {
-	if (!buffer) return;
+void draw_line(Canvas canvas, int startX, int startY, int endX, int endY, Color color) {
+	size_t width = canvas.width;
+	size_t height = canvas.height;
 
-	int index = (y * width + x) * 3;
-	uint8_t* pPixel = static_cast<uint8_t*>(buffer) + index;
-
-	pPixel[0] = color.blue;
-	pPixel[1] = color.green;
-	pPixel[2] = color.red;
-}
-
-float lerp(float start, float end, float t) {
-	return start * (1 - t) + end * t;
-}
-
-void draw_line(void* buffer, int width, int height, int startX, int startY, int endX, int endY, Color color) {
 	bool inverted = false;
 
 	if (abs(endX - startX) < abs(endY - startY)) {
@@ -80,13 +108,13 @@ void draw_line(void* buffer, int width, int height, int startX, int startY, int 
 	int d = 2 * dy - dx;
 	int y = startY;
 
-	for (int x = startX; x <= endX && 0 <= x && x < width; x++) {
+	for (size_t x = startX; x <= endX && 0 <= x && x < width; x++) {
 		if (0 <= y && y < height) {
 			if (!inverted) {
-				set_pixel_color(buffer, width, height, x, y, color);
+				canvas.set_pixel_color(x, y, color);
 			}
 			else {
-				set_pixel_color(buffer, height, width, y, x, color);
+				canvas.set_pixel_color(y, x, color);
 			}
 		}
 
@@ -98,40 +126,20 @@ void draw_line(void* buffer, int width, int height, int startX, int startY, int 
 	}
 }
 
-void matrix_vector_multiplication(float matrix[4][4], float* vector) {
-	float out[4] = {};
-
-	for (int i = 0; i < 4; i++) {
-		float row_sum = 0;
-		for (int j = 0; j < 4; j++) {
-			row_sum += matrix[i][j] * vector[j];
-		}
-
-		out[i] = row_sum;
-	}
-
-	for (int i = 0; i < 4; i++) {
-		vector[i] = out[i];
-	}
-}
-
 struct EdgeHasher {
-	inline size_t operator()(const std::pair<int, int>& p) const {
-		std::hash<int> hasher;
+	inline size_t operator()(const std::pair<size_t, size_t>& p) const {
+		std::hash<size_t> hasher;
 		return hasher(p.first + p.second);
 	}
 };
 
-template<size_t S>
-std::unordered_set<std::pair<int, int>, EdgeHasher> triangles_to_edges(std::array<size_t, S>& triangles) {
-	std::unordered_set<std::pair<int, int>, EdgeHasher> edges;
+std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> triangles_to_edges(const std::vector<size_t>& triangles) {
+	std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> edges;
 
-	for (int i = 0; i < S / 3; i++) {
-		int t = i * 3;
-
-		int v1 = triangles[t];
-		int v2 = triangles[t + 1];
-		int v3 = triangles[t + 2];
+	for (size_t i = 0; i < triangles.size() / 3; i++) {
+		size_t v1 = triangles[3 * i];
+		size_t v2 = triangles[3 * i + 1];
+		size_t v3 = triangles[3 * i + 2];
 
 		edges.insert({ v1, v2 });
 		edges.insert({ v2, v3 });
@@ -146,7 +154,6 @@ T clamp(T min, T max, T value) {
 	return std::max(min, std::min(value, max));
 }
 
-
 bool edge_function(float x, float y, float x0, float y0, float x1, float y1, bool counter_clockwise) {
 
 	if (counter_clockwise) {
@@ -155,7 +162,6 @@ bool edge_function(float x, float y, float x0, float y0, float x1, float y1, boo
 	else {
 		return ((x - x0) * (y1 - y0) - (x1 - x0) * (y - y0) >= 0);
 	}
-
 }
 
 bool is_in_triangle(float x, float y, float x0, float y0, float x1, float y1, float x2, float y2, bool counter_clockwise) {
@@ -167,14 +173,7 @@ bool is_in_triangle(float x, float y, float x0, float y0, float x1, float y1, fl
 	return inside;
 }
 
-/// <summary>
-/// Rasterizes the triangles expressed with vertices and indices to a canvas.
-/// 
-/// </summary>
-/// <param name="canvas">The canvas to rasterize to.</param>
-/// <param name="points">A vector in which each 2 elements are the coordinates of a point on the canvas.</param>
-/// <param name="indices">A vector in which each 3 indices are indices of points that form a triangle.</param>
-void rasterize(Canvas canvas, std::vector<float> points, std::vector<size_t> indices) {
+void rasterize(Canvas canvas, const std::vector<float>& points, const std::vector<size_t>& indices) {
 	assert(0 < canvas.width);
 	assert(0 < canvas.height);
 	assert(points.size() % 2 == 0);
@@ -185,14 +184,14 @@ void rasterize(Canvas canvas, std::vector<float> points, std::vector<size_t> ind
 		size_t p2 = indices[3 * i + 1];
 		size_t p3 = indices[3 * i + 2];
 
-		float x1 = points[2 * p1];
-		float y1 = points[2 * p1 + 1];
+		float x1 = points[3 * p1];
+		float y1 = points[3 * p1 + 1];
 
-		float x2 = points[2 * p2];
-		float y2 = points[2 * p2 + 1];
+		float x2 = points[3 * p2];
+		float y2 = points[3 * p2 + 1];
 
-		float x3 = points[2 * p3];
-		float y3 = points[2 * p3 + 1];
+		float x3 = points[3 * p3];
+		float y3 = points[3 * p3 + 1];
 
 		size_t zero = 0;
 
@@ -221,63 +220,139 @@ void rasterize(Canvas canvas, std::vector<float> points, std::vector<size_t> ind
 	}
 }
 
-void render_once(void* buffer, int width, int height) {
-	// draw_line(buffer, width, height, 100, 410, 300, 100);
+void draw_wireframe(Canvas canvas, const std::vector<float>& vertices, const std::vector<size_t>& indices) {
+	assert(vertices.size() % 3 == 0);
 
+	auto edges = triangles_to_edges(indices);
+
+	for (auto edge : edges) {
+		size_t start = edge.first;
+		size_t end = edge.second;
+
+		float start_x = vertices[3 * start];
+		float start_y = vertices[3 * start + 1];
+		float end_x = vertices[3 * end];
+		float end_y = vertices[3 * end + 1];
+
+		int start_x_int = static_cast<int>(std::round(start_x));
+		int start_y_int = static_cast<int>(std::round(start_y));
+		int end_x_int = static_cast<int>(std::round(end_x));
+		int end_y_int = static_cast<int>(std::round(end_y));
+
+		draw_line(
+			canvas, 
+			start_x_int, 
+			start_y_int, 
+			end_x_int, 
+			end_y_int, 
+			Color(255, 0, 0)
+		);
+	}
 }
 
-void render(void* buffer, int width, int height, float time) {
+enum class RenderOptions {
+	WIREFRAME = 1 << 0,
+	RASTERIZE = 1 << 1
+};
 
-	
-	for (int x = 0; x < width; x++) {
-		for (int y = 0; y < height; y++) {
-			set_pixel_color(buffer, width, height, x, y, Color(0, 0, 0));
-		}
+inline RenderOptions operator&(RenderOptions a, RenderOptions b)
+{
+	return static_cast<RenderOptions>(static_cast<int>(a) & static_cast<int>(b));
+}
+
+inline RenderOptions operator|(RenderOptions a, RenderOptions b)
+{
+	return static_cast<RenderOptions>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+void render(Canvas canvas, const std::vector<float>& vertices, const std::vector<size_t>& indices, RenderOptions draw_options) {
+	assert(vertices.size() % 4 == 0);
+
+	std::vector<float> screen_space_vertices;
+
+	for (size_t i = 0; i < vertices.size() / 4; i++) {
+		float x = vertices[4 * i];
+		float y = vertices[4 * i + 1];
+		float z = vertices[4 * i + 2];
+		float w = vertices[4 * i + 3];
+
+		float screen_x = canvas.width * (x / w + 1) / 2;
+		float screen_y = canvas.height * (y / w + 1) / 2;
+
+		screen_space_vertices.push_back(screen_x);
+		screen_space_vertices.push_back(screen_y);
+		screen_space_vertices.push_back(z);
 	}
-	
 
-	/*
-	for (int x = 0; x < width; x++) {
-		for (int y = 0; y < height; y++) {
-			uint8_t red = static_cast<uint8_t>(lerp(0, 255, abs(sin(time))));
-			uint8_t green = static_cast<uint8_t>(lerp(0, 255, static_cast<float>(x) / static_cast<float>(width)));
-			uint8_t blue = static_cast<uint8_t>(lerp(0, 255, static_cast<float>(y) / static_cast<float>(height)));
-
-			set_pixel_color(buffer, width, height, x, y, Color(red, green, blue));
-		}
+	if ((draw_options & RenderOptions::RASTERIZE) == RenderOptions::RASTERIZE) {
+		rasterize(canvas, screen_space_vertices, indices);
 	}
-	*/
 
-	float points[8][4] = { 
-		// front
-		{-1, -1, 1, 1},
-		{1, -1, 1, 1},
-		{1, 1, 1, 1},
-		{-1, 1, 1, 1},
-		// back
-		{-1, -1, -1, 1},
-		{1, -1, -1, 1},
-		{1, 1, -1, 1},
-		{-1, 1, -1, 1}
+	if ((draw_options & RenderOptions::WIREFRAME) == RenderOptions::WIREFRAME) {
+		draw_wireframe(canvas, screen_space_vertices, indices);
+	}
+}
+
+struct Uniforms {
+	float time;
+	Matrix4 projection;
+};
+
+struct Varying { };
+
+Vector4 vertex_shader(Vector4 vector, Uniforms uniforms, Varying& out) {
+	float time = uniforms.time;
+
+	Matrix4 model1 = {
+		1, 0, 0, 0,
+		0, cos(time / 2), -sin(time / 2), 0,
+		0, sin(time / 2), cos(time / 2), 0,
+		0, 0, 0, 1
 	};
 
-	int nice_edges[12][2] = {
-		// front
-		{0, 1},
-		{1, 2},
-		{2, 3},
-		{3, 0},
-		// back
-		{4, 5},
-		{5, 6},
-		{6, 7},
-		{7, 4},
-		// sides
-		{0, 4},
-		{1, 5},
-		{2, 6},
-		{3, 7}
+	Matrix4 model2 = {
+		cos(time / 2), 0, sin(time / 2), 0,
+		0, 1, 0, 0,
+		-sin(time / 2), 0, cos(time / 2), -4,
+		0, 0, 0, 1
 	};
+
+	return uniforms.projection * (model2 * (model1 * vector));
+}
+
+Color fragment_shader(Uniforms uniforms, Varying in) {
+	return Color(255, 0, 0);
+}
+
+void draw(void* buffer, int width, int height, float time) {
+	auto canvas = Canvas(static_cast<uint8_t*>(buffer), width, height);
+	canvas.clear(Color(0, 0, 0));
+
+	float points[32] = { 
+		// front
+		-1, -1, 1, 1,
+		1, -1, 1, 1,
+		1, 1, 1, 1,
+		-1, 1, 1, 1,
+		// back
+		-1, -1, -1, 1,
+		1, -1, -1, 1,
+		1, 1, -1, 1,
+		-1, 1, -1, 1
+	};
+
+	std::array<Vector3, 8> vertices = { {
+		// front
+		{ -1, -1, 1 },
+		{ 1, -1, 1 },
+		{ 1, 1, 1 },
+		{ -1, 1, 1 },
+		// back
+		{ -1, -1, -1 },
+		{ 1, -1, -1 },
+		{ 1, 1, -1 },
+		{ -1, 1, -1 }
+	} };
 
 	std::array<size_t, 36> triangles = {
 		// front
@@ -300,101 +375,27 @@ void render(void* buffer, int width, int height, float time) {
 		1, 0, 4
 	};
 
-	float model1[4][4] = {
-		1, 0, 0, 0,
-		0, cos(time / 2), -sin(time / 2), 0,
-		0, sin(time / 2), cos(time / 2), 0,
-		0, 0, 0, 1
-	};
-
-
-	float model2[4][4] = {
-		cos(time / 2), 0, sin(time / 2), 0,
-		0, 1, 0, 0,
-		-sin(time / 2), 0, cos(time / 2), -4,
-		0, 0, 0, 1
-	};
-
 	float l = -2;
 	float r = 2;
 	float b = -1.4f;
 	float t = b + static_cast<float>(height) / static_cast<float>(width) * (r - l);
 
-	float projection[4][4] = {
+	Matrix4 projection = {
 		2 / (r - l), 0, (r + l) / (r - l), 0,
 		0, 2 / (t - b), (t + b) / (t - b), 0,
 		0, 0, 0, 0,
 		0, 0, -1, 0
 	};
 
-	float transformed_points[16];
-	for (int i = 0; i < 8; i++) {
-		matrix_vector_multiplication(model1, points[i]);
-		matrix_vector_multiplication(model2, points[i]);
-		matrix_vector_multiplication(projection, points[i]);
-
-		// std::cout << "x: " << points[i][0] << " y: " << points[i][1] << " z: " << points[i][2] << "\n";
-
-		transformed_points[2 * i] = width * (1 + points[i][0] / points[i][3]) / 2;
-		transformed_points[2 * i + 1] = height * (1 + points[i][1] / points[i][3]) / 2;
-
-		// std::cout << "x: " << transformed_points[i][0] << " y: " << transformed_points[i][1] << "\n";
-	}
-
-
-
-	
-	auto canvas = Canvas(static_cast<uint8_t*>(buffer), width, height);
-
-	std::vector<float> points_vec(transformed_points, transformed_points + 16);
+	std::vector<float> points_vec(points, points + 32);
 	std::vector<size_t> indices_vec(triangles.begin(), triangles.end());
 
-	
-	rasterize(canvas, points_vec, indices_vec);
+	Uniforms uniforms = {time, projection};
 
-	/*
-	auto edges = triangles_to_edges(triangles);
-
-	for (auto edge : edges) {
-		int start = edge.first;
-		int end = edge.second;
-
-		int startX = transformed_points[2 * start];
-		int startY = transformed_points[2 * start + 1];
-		int endX = transformed_points[2 * end + 0];
-		int endY = transformed_points[2 * end + 1];
-
-		draw_line(buffer, width, height, startX, startY, endX, endY, Color(255, 0, 0));
+	for (size_t i = 0; i < 8; i++) {
+		Varying varying;
+		vertex_shader(vertices[i].extend(1), uniforms, varying);
 	}
-	*/
 
-	
-	/*
-	for (int i = 0; i < 12; i++) {
-		int start = nice_edges[i][0];
-		int end = nice_edges[i][1];
-
-		int startX = transformed_points[2 * start];
-		int startY = transformed_points[2 * start + 1];
-		int endX = transformed_points[2 * end];
-		int endY = transformed_points[2 * end + 1];
-
-		// std::cout << "x0: " << startX << " y0: " << startY << " x1: " << endX << " y1: " << endY << "\n";
-
-		draw_line(buffer, width, height, startX, startY, endX, endY, Color(0, 0, 255));
-	}
-	*/
-	
-	// colorful stuff
-	/*
-	for (int x = 0; x < width; x++) {
-		for (int y = 0; y < height; y++) {
-			uint8_t red = static_cast<uint8_t>(lerp(0, 255, abs(sin(time))));
-			uint8_t green = static_cast<uint8_t>(lerp(0, 255, static_cast<float>(x) / static_cast<float>(width)));
-			uint8_t blue= static_cast<uint8_t>(lerp(0, 255, static_cast<float>(y) / static_cast<float>(height)));
-			
-			set_pixel_color(buffer, width, height, x, y, red, green, blue);
-		}
-	}
-	*/
+	render(canvas, points_vec, indices_vec, RenderOptions::WIREFRAME | RenderOptions::RASTERIZE);
 }
