@@ -4,8 +4,48 @@
 #include <vector>
 #include <cassert>
 #include <array>
+#include <functional>
+#include <unordered_map>
+#include <typeindex>
+#include <any>
 
 #include "linear_algebra.h"
+
+struct Color {
+	uint8_t red;
+	uint8_t green;
+	uint8_t blue;
+
+	Color(uint8_t red, uint8_t green, uint8_t blue) : red(red), green(green), blue(blue) {}
+};
+
+using StringAnyMap = std::unordered_map<std::string, std::any>;
+
+struct Interpolator {
+	std::unordered_map <std::type_index, std::function<std::any(std::any, std::any, std::any, Vector3)>> map;
+
+	Interpolator(bool default_values) {
+		if (default_values) {
+			map[typeid(Color)] = [](std::any a, std::any b, std::any c, Vector3 distribution) -> std::any {
+				Color a_color = std::any_cast<Color>(a);
+				Color b_color = std::any_cast<Color>(b);
+				Color c_color = std::any_cast<Color>(c);
+
+				uint8_t red = distribution.x * a_color.red + distribution.y * b_color.red + distribution.z * c_color.red;
+				uint8_t green = distribution.x * a_color.green + distribution.y * b_color.green + distribution.z * c_color.green;
+				uint8_t blue = distribution.x * a_color.blue + distribution.y * b_color.blue + distribution.z * c_color.blue;
+
+				return Color(red, green, blue);
+			};
+		}
+	}
+
+	std::any interpolate(std::any a, std::any b, std::any c, Vector3 distribution) {
+		assert(a.type() == b.type() && b.type() == c.type());
+
+		return map.at(a.type())(a, b, c, distribution);
+	}
+};
 
 void matrix_vector_multiplication(float* matrix, float* vector) {
 	float out[4] = {};
@@ -25,25 +65,17 @@ void matrix_vector_multiplication(float* matrix, float* vector) {
 }
 
 struct TriangleIndices {
-	size_t p1 = 0;
-	size_t p2 = 0;
-	size_t p3 = 0;
+	size_t v1 = 0;
+	size_t v2 = 0;
+	size_t v3 = 0;
 
 	TriangleIndices(std::initializer_list<size_t> list) {
 		assert(list.size() == 3);
 
-		p1 = *list.begin();
-		p2 = *(list.begin() + 1);
-		p3 = *(list.begin() + 2);
+		v1 = *list.begin();
+		v2 = *(list.begin() + 1);
+		v3 = *(list.begin() + 2);
 	}
-};
-
-struct Color {
-	uint8_t red;
-	uint8_t green;
-	uint8_t blue;
-
-	Color(uint8_t red, uint8_t green, uint8_t blue) : red(red), green(green), blue(blue) {}
 };
 
 /// <summary>
@@ -60,7 +92,7 @@ struct Canvas {
 	void set_pixel_color(size_t x, size_t y, Color color) const {
 		assert(buffer);
 
-		size_t index = (y * width + x) * 3;
+		size_t index = ((height - 1 - y) * width + x) * 3;
 		uint8_t* pixel = buffer + index;
 
 		pixel[0] = color.blue;
@@ -104,7 +136,7 @@ void draw_line(Canvas canvas, int startX, int startY, int endX, int endY, Color 
 		dy = -dy;
 		yi = -1;
 	}
-	
+
 	int d = 2 * dy - dx;
 	int y = startY;
 
@@ -133,13 +165,13 @@ struct EdgeHasher {
 	}
 };
 
-std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> triangles_to_edges(const std::vector<size_t>& triangles) {
+std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> triangles_to_edges(const std::vector<TriangleIndices>& triangles) {
 	std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> edges;
 
-	for (size_t i = 0; i < triangles.size() / 3; i++) {
-		size_t v1 = triangles[3 * i];
-		size_t v2 = triangles[3 * i + 1];
-		size_t v3 = triangles[3 * i + 2];
+	for (const TriangleIndices& triangle : triangles) {
+		size_t v1 = triangle.v1;
+		size_t v2 = triangle.v2;
+		size_t v3 = triangle.v3;
 
 		edges.insert({ v1, v2 });
 		edges.insert({ v2, v3 });
@@ -154,57 +186,70 @@ T clamp(T min, T max, T value) {
 	return std::max(min, std::min(value, max));
 }
 
-bool edge_function(float x, float y, float x0, float y0, float x1, float y1, bool counter_clockwise) {
-
-	if (counter_clockwise) {
-		return ((x - x1) * (y0 - y1) - (x0 - x1) * (y - y1) >= 0);
-	}
-	else {
-		return ((x - x0) * (y1 - y0) - (x1 - x0) * (y - y0) >= 0);
-	}
+// Magnitude of the cossproduct of vectors ab and ac.
+float edge_function(Vector2 a, Vector2 b, Vector2 c) {
+	return (c.x - b.x) * (a.y - b.y) - (a.x - b.x) * (c.y - b.y);
 }
 
-bool is_in_triangle(float x, float y, float x0, float y0, float x1, float y1, float x2, float y2, bool counter_clockwise) {
-	bool inside = true;
-	inside &= edge_function(x, y, x0, y0, x1, y1, counter_clockwise);
-	inside &= edge_function(x, y, x1, y1, x2, y2, counter_clockwise);
-	inside &= edge_function(x, y, x2, y2, x0, y0, counter_clockwise);
+// Determines whether a point is inside a triangle.
+// If yes then it also writes the barycentric coordinates of the point in terms of v1, v2, v3 to "barycentric".
+bool is_in_triangle(Vector2 p, Vector2 v1, Vector2 v2, Vector2 v3, Vector3& barycentric, bool counter_clockwise) {
 
-	return inside;
+	float area = edge_function(v1, v2, v3);
+	float w1 = edge_function(v2, v3, p);
+	float w2 = edge_function(v3, v1, p);
+	float w3 = edge_function(v1, v2, p);
+
+	if (!counter_clockwise) {
+		area = -area;
+		w1 = -w1;
+		w2 = -w2;
+		w3 = -w3;
+	}
+
+	if (w1 >= 0 && w2 >= 0 && w3 >= 0) {
+		// the point is inside the triangle
+		w1 /= area;
+		w2 /= area;
+		w3 /= area;
+
+		barycentric = Vector3{ w1, w2, w3 };
+		return true;
+	}
+
+	return false;
 }
 
-void rasterize(Canvas canvas, const std::vector<float>& points, const std::vector<size_t>& indices) {
+template<typename U>
+void rasterize(
+	Canvas canvas, 
+	const std::vector<Vector3>& vertices, 
+	const std::vector<TriangleIndices>& indices,
+	U uniforms,
+	const std::vector<StringAnyMap>& varying,
+	Interpolator interpolator,
+	std::function<Color(U, const StringAnyMap&)> fragment_shader
+) {
 	assert(0 < canvas.width);
 	assert(0 < canvas.height);
-	assert(points.size() % 2 == 0);
-	assert(indices.size() % 3 == 0);
 
-	for (size_t i = 0; i < indices.size() / 3; i++) {
-		size_t p1 = indices[3 * i];
-		size_t p2 = indices[3 * i + 1];
-		size_t p3 = indices[3 * i + 2];
-
-		float x1 = points[3 * p1];
-		float y1 = points[3 * p1 + 1];
-
-		float x2 = points[3 * p2];
-		float y2 = points[3 * p2 + 1];
-
-		float x3 = points[3 * p3];
-		float y3 = points[3 * p3 + 1];
+	for (const TriangleIndices& triangle : indices) {
+		Vector3 v1 = vertices[triangle.v1];
+		Vector3 v2 = vertices[triangle.v2];
+		Vector3 v3 = vertices[triangle.v3];
 
 		size_t zero = 0;
 
-		size_t bbmin_x = static_cast<size_t>(std::floor(std::min({ x1, x2, x3 })));
+		size_t bbmin_x = static_cast<size_t>(std::floor(std::min({ v1.x, v2.x, v3.x })));
 		bbmin_x = clamp(zero, canvas.width - 1, bbmin_x);
 
-		size_t bbmin_y = static_cast<size_t>(std::floor(std::min({ y1, y2, y3 })));
+		size_t bbmin_y = static_cast<size_t>(std::floor(std::min({ v1.y, v2.y, v3.y })));
 		bbmin_y = clamp(zero, canvas.height - 1, bbmin_y);
-		
-		size_t bbmax_x = static_cast<size_t>(std::floor(std::max({ x1, x2, x3 })));
+
+		size_t bbmax_x = static_cast<size_t>(std::floor(std::max({ v1.x, v2.x, v3.x })));
 		bbmax_x = clamp(zero, canvas.width - 1, bbmax_x);
 
-		size_t bbmax_y = static_cast<size_t>(std::floor(std::max({ y1, y2, y3 })));
+		size_t bbmax_y = static_cast<size_t>(std::floor(std::max({ v1.y, v2.y, v3.y })));
 		bbmax_y = clamp(zero, canvas.height - 1, bbmax_y);
 
 		for (size_t x = bbmin_x; x <= bbmax_x; x++) {
@@ -212,39 +257,55 @@ void rasterize(Canvas canvas, const std::vector<float>& points, const std::vecto
 				float x_float = static_cast<float>(x);
 				float y_float = static_cast<float>(y);
 
-				if (is_in_triangle(x_float, y_float, x1, y1, x2, y2, x3, y3, true)) {
-					canvas.set_pixel_color(x, y, Color(255, 255, 255));
+				Vector3 barycentric;
+
+				if (is_in_triangle({x_float, y_float}, v1.xy(), v2.xy(), v3.xy(), barycentric, true)) {
+					// transform varying
+					StringAnyMap interpolated_varying;
+
+					StringAnyMap varying_v1 = varying[triangle.v1];
+					StringAnyMap varying_v2 = varying[triangle.v2];
+					StringAnyMap varying_v3 = varying[triangle.v3];
+
+					for (auto const& item : varying_v1) {
+						std::string key = item.first;
+
+						std::any value_v1 = item.second;
+						std::any value_v2 = varying_v2.at(key);
+						std::any value_v3 = varying_v3.at(key);
+
+						std::any value = interpolator.interpolate(value_v1, value_v2, value_v3, barycentric);
+						interpolated_varying[item.first] = value;
+					}
+
+					// execute fragment shader
+					Color color = fragment_shader(uniforms, interpolated_varying);
+
+					canvas.set_pixel_color(x, y, color);
 				}
 			}
 		}
 	}
 }
 
-void draw_wireframe(Canvas canvas, const std::vector<float>& vertices, const std::vector<size_t>& indices) {
-	assert(vertices.size() % 3 == 0);
-
+void draw_wireframe(Canvas canvas, const std::vector<Vector3>& vertices, const std::vector<TriangleIndices>& indices) {
 	auto edges = triangles_to_edges(indices);
 
 	for (auto edge : edges) {
-		size_t start = edge.first;
-		size_t end = edge.second;
+		Vector3 start = vertices[edge.first];
+		Vector3 end = vertices[edge.second];
 
-		float start_x = vertices[3 * start];
-		float start_y = vertices[3 * start + 1];
-		float end_x = vertices[3 * end];
-		float end_y = vertices[3 * end + 1];
-
-		int start_x_int = static_cast<int>(std::round(start_x));
-		int start_y_int = static_cast<int>(std::round(start_y));
-		int end_x_int = static_cast<int>(std::round(end_x));
-		int end_y_int = static_cast<int>(std::round(end_y));
+		int start_x_int = static_cast<int>(std::round(start.x));
+		int start_y_int = static_cast<int>(std::round(start.y));
+		int end_x_int = static_cast<int>(std::round(end.x));
+		int end_y_int = static_cast<int>(std::round(end.y));
 
 		draw_line(
-			canvas, 
-			start_x_int, 
-			start_y_int, 
-			end_x_int, 
-			end_y_int, 
+			canvas,
+			start_x_int,
+			start_y_int,
+			end_x_int,
+			end_y_int,
 			Color(255, 0, 0)
 		);
 	}
@@ -265,30 +326,49 @@ inline RenderOptions operator|(RenderOptions a, RenderOptions b)
 	return static_cast<RenderOptions>(static_cast<int>(a) | static_cast<int>(b));
 }
 
-void render(Canvas canvas, const std::vector<float>& vertices, const std::vector<size_t>& indices, RenderOptions draw_options) {
-	assert(vertices.size() % 4 == 0);
+template<typename U>
+void render(
+	Canvas canvas,
+	const std::vector<Vector3>& vertices,
+	const std::vector<TriangleIndices>& indices,
+	// const std::vector<A>& vertex_attributes,
+	U uniforms,
+	std::function<Vector4(Vector4, U, StringAnyMap&)> vertex_shader,
+	std::function<Color(U, const StringAnyMap&)> fragment_shader,
+	Interpolator interpolator,
+	RenderOptions render_options
+) {
+	// execute vertex shader
 
-	std::vector<float> screen_space_vertices;
+	std::vector<Vector4> processed_vertices;
+	std::vector<StringAnyMap> varying;
 
-	for (size_t i = 0; i < vertices.size() / 4; i++) {
-		float x = vertices[4 * i];
-		float y = vertices[4 * i + 1];
-		float z = vertices[4 * i + 2];
-		float w = vertices[4 * i + 3];
+	for (const Vector3& vertex : vertices) {
+		StringAnyMap map;
+		Vector4 processed_vertex = vertex_shader(vertex.extend(1), uniforms, map);
 
-		float screen_x = canvas.width * (x / w + 1) / 2;
-		float screen_y = canvas.height * (y / w + 1) / 2;
-
-		screen_space_vertices.push_back(screen_x);
-		screen_space_vertices.push_back(screen_y);
-		screen_space_vertices.push_back(z);
+		processed_vertices.push_back(processed_vertex);
+		varying.push_back(map);
 	}
 
-	if ((draw_options & RenderOptions::RASTERIZE) == RenderOptions::RASTERIZE) {
-		rasterize(canvas, screen_space_vertices, indices);
+	// calculate screen-space vertices
+
+	std::vector<Vector3> screen_space_vertices;
+
+	for (const Vector4& vertex : processed_vertices) {
+		float screen_x = canvas.width * (vertex.x / vertex.w + 1) / 2;
+		float screen_y = canvas.height * (vertex.y / vertex.w + 1) / 2;
+
+		screen_space_vertices.push_back(Vector3{ screen_x, screen_y, vertex.z });
 	}
 
-	if ((draw_options & RenderOptions::WIREFRAME) == RenderOptions::WIREFRAME) {
+	// render
+
+	if ((render_options & RenderOptions::RASTERIZE) == RenderOptions::RASTERIZE) {
+		rasterize(canvas, screen_space_vertices, indices, uniforms, varying, interpolator, fragment_shader);
+	}
+
+	if ((render_options & RenderOptions::WIREFRAME) == RenderOptions::WIREFRAME) {
 		draw_wireframe(canvas, screen_space_vertices, indices);
 	}
 }
@@ -300,7 +380,7 @@ struct Uniforms {
 
 struct Varying { };
 
-Vector4 vertex_shader(Vector4 vector, Uniforms uniforms, Varying& out) {
+Vector4 vert(Vector4 vertex, Uniforms uniforms, StringAnyMap& varying) {
 	float time = uniforms.time;
 
 	Matrix4 model1 = {
@@ -317,63 +397,74 @@ Vector4 vertex_shader(Vector4 vector, Uniforms uniforms, Varying& out) {
 		0, 0, 0, 1
 	};
 
-	return uniforms.projection * (model2 * (model1 * vector));
+	if (vertex.x < 0) {
+		varying["color"] = Color(255, 0, 0);
+	}
+	else if (vertex.y < 0) {
+		varying["color"] = Color(0, 255, 0);
+	}
+	else {
+		varying["color"] = Color(0, 0, 255);
+	}
+
+	return uniforms.projection * (model2 * (model1 * vertex));
 }
 
-Color fragment_shader(Uniforms uniforms, Varying in) {
-	return Color(255, 0, 0);
+Color frag(Uniforms uniforms, const StringAnyMap& varying) {
+	return std::any_cast<Color>(varying.at("color"));
 }
 
 void draw(void* buffer, int width, int height, float time) {
-	auto canvas = Canvas(static_cast<uint8_t*>(buffer), width, height);
+	Canvas canvas = Canvas(static_cast<uint8_t*>(buffer), width, height);
 	canvas.clear(Color(0, 0, 0));
 
-	float points[32] = { 
-		// front
-		-1, -1, 1, 1,
-		1, -1, 1, 1,
-		1, 1, 1, 1,
-		-1, 1, 1, 1,
-		// back
-		-1, -1, -1, 1,
-		1, -1, -1, 1,
-		1, 1, -1, 1,
-		-1, 1, -1, 1
-	};
+	//std::vector<Vector3> vertices{ {
+	//	{0.5, -0.5, 0.0},
+	//	{0.0, 0.5, 0.0},
+	//	{-0.5, -0.5, 0.0}
+	//} };
 
-	std::array<Vector3, 8> vertices = { {
-		// front
-		{ -1, -1, 1 },
-		{ 1, -1, 1 },
-		{ 1, 1, 1 },
-		{ -1, 1, 1 },
-		// back
-		{ -1, -1, -1 },
-		{ 1, -1, -1 },
-		{ 1, 1, -1 },
-		{ -1, 1, -1 }
+	//std::vector<TriangleIndices> indices{ {
+	//	{0, 1, 2}
+	//} };
+
+	
+	// Cube
+
+	std::vector<Vector3> vertices{ {
+			// front
+			{ -1, -1, 1 },
+			{ 1, -1, 1 },
+			{ 1, 1, 1 },
+			{ -1, 1, 1 },
+			// back
+			{ -1, -1, -1 },
+			{ 1, -1, -1 },
+			{ 1, 1, -1 },
+			{ -1, 1, -1 }
+		} };
+
+	std::vector<TriangleIndices> indices{ {
+			// front
+			{0, 1, 2},
+			{2, 3, 0},
+			// back
+			{5, 4, 7},
+			{7, 6, 5},
+			//left
+			{4, 0, 3},
+			{3, 7, 4},
+			// right
+			{1, 5, 6},
+			{6, 2, 1},
+			// top
+			{3, 2, 6},
+			{6, 7, 3},
+			// bottom
+			{4, 5, 1},
+			{1, 0, 4}
 	} };
-
-	std::array<size_t, 36> triangles = {
-		// front
-		0, 1, 2,
-		2, 3, 0,
-		// back
-		5, 4, 7,
-		7, 6, 5,
-		//left
-		4, 0, 3,
-		3, 7, 4,
-		// right
-		1, 5, 6,
-		6, 2, 1,
-		// top
-		3, 2, 6,
-		6, 7, 3,
-		// bottom
-		4, 5, 1,
-		1, 0, 4
-	};
+	
 
 	float l = -2;
 	float r = 2;
@@ -387,15 +478,12 @@ void draw(void* buffer, int width, int height, float time) {
 		0, 0, -1, 0
 	};
 
-	std::vector<float> points_vec(points, points + 32);
-	std::vector<size_t> indices_vec(triangles.begin(), triangles.end());
+	Uniforms uniforms = { time, projection };
+	Interpolator interpolator(true);
 
-	Uniforms uniforms = {time, projection};
+	std::function<Vector4(Vector4, Uniforms, StringAnyMap&)> vertex_shader = &vert;
+	std::function<Color(Uniforms, const StringAnyMap&)> fragment_shader = &frag;
 
-	for (size_t i = 0; i < 8; i++) {
-		Varying varying;
-		vertex_shader(vertices[i].extend(1), uniforms, varying);
-	}
-
-	render(canvas, points_vec, indices_vec, RenderOptions::WIREFRAME | RenderOptions::RASTERIZE);
+	render(canvas, vertices, indices, uniforms, vertex_shader, fragment_shader, interpolator, 
+		RenderOptions::RASTERIZE);
 }

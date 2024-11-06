@@ -1,6 +1,11 @@
 #pragma once
 #include <array>
 
+typedef struct Vector4 Vector4;
+typedef struct Vector3 Vector3;
+typedef struct Vector2 Vector2;
+typedef struct Matrix4 Matrix4;
+
 struct Vector4 {
 	float x = 0;
 	float y = 0;
@@ -33,7 +38,8 @@ struct Vector3 {
 
 	Vector3();
 	Vector3(std::initializer_list<float> list);
-	Vector4 extend(float w);
+	Vector4 extend(float w) const;
+	Vector2 xy() const;
 };
 
 struct Vector2 {

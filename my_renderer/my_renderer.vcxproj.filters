@@ -32,5 +32,8 @@
     <ClInclude Include="linear_algebra.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="draw_private.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

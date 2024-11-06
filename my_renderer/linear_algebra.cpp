@@ -19,8 +19,12 @@ Vector3::Vector3(std::initializer_list<float> list) {
 	z = *(list.begin() + 2);
 }
 
-Vector4 Vector3::extend(float w) {
+Vector4 Vector3::extend(float w) const {
 	return { x, y, z, w };
+}
+
+Vector2 Vector3::xy() const{
+	return { x, y };
 }
 
 Vector4::Vector4() {};
