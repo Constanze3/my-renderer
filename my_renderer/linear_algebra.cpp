@@ -10,6 +10,10 @@ Vector2::Vector2(std::initializer_list<float> list) {
 	y = *(list.begin() + 1);
 }
 
+Vector2 Vector2::operator-(Vector2 other) {
+	return { x - other.x, y - other.y };
+}
+
 Vector3::Vector3() {};
 Vector3::Vector3(std::initializer_list<float> list) {
 	assert(list.size() == 3);

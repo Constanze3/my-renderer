@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <typeindex>
 #include <any>
+#include <limits>
 
 #include "linear_algebra.h"
 
@@ -36,14 +37,24 @@ struct Interpolator {
 				uint8_t blue = distribution.x * a_color.blue + distribution.y * b_color.blue + distribution.z * c_color.blue;
 
 				return Color(red, green, blue);
-			};
+				};
+
+			map[typeid(float)] = [](std::any a, std::any b, std::any c, Vector3 distribution) -> std::any {
+				float a_float = std::any_cast<float>(a);
+				float b_float = std::any_cast<float>(b);
+				float c_float = std::any_cast<float>(c);
+
+				float value = distribution.x * a_float + distribution.y * b_float + distribution.z * c_float;
+				return value;
+				};
 		}
 	}
 
-	std::any interpolate(std::any a, std::any b, std::any c, Vector3 distribution) {
-		assert(a.type() == b.type() && b.type() == c.type());
-
-		return map.at(a.type())(a, b, c, distribution);
+	template<typename T>
+	T interpolate(std::any a, std::any b, std::any c, Vector3 distribution) {
+		return std::any_cast<T>(
+			map.at(a.type())(a, b, c, distribution)
+		);
 	}
 };
 
@@ -186,6 +197,15 @@ T clamp(T min, T max, T value) {
 	return std::max(min, std::min(value, max));
 }
 
+bool is_top_or_left(Vector2 a, Vector2 b) {
+	Vector2 ab = b - a;
+
+	bool is_top = ab.y == 0 && ab.x > 0;
+	bool is_left = ab.y > 0;
+
+	return is_top || is_left;
+}
+
 // Magnitude of the cossproduct of vectors ab and ac.
 float edge_function(Vector2 a, Vector2 b, Vector2 c) {
 	return (c.x - b.x) * (a.y - b.y) - (a.x - b.x) * (c.y - b.y);
@@ -194,7 +214,6 @@ float edge_function(Vector2 a, Vector2 b, Vector2 c) {
 // Determines whether a point is inside a triangle.
 // If yes then it also writes the barycentric coordinates of the point in terms of v1, v2, v3 to "barycentric".
 bool is_in_triangle(Vector2 p, Vector2 v1, Vector2 v2, Vector2 v3, Vector3& barycentric, bool counter_clockwise) {
-
 	float area = edge_function(v1, v2, v3);
 	float w1 = edge_function(v2, v3, p);
 	float w2 = edge_function(v3, v1, p);
@@ -207,8 +226,14 @@ bool is_in_triangle(Vector2 p, Vector2 v1, Vector2 v2, Vector2 v3, Vector3& bary
 		w3 = -w3;
 	}
 
-	if (w1 >= 0 && w2 >= 0 && w3 >= 0) {
-		// the point is inside the triangle
+	bool overlaps = true;
+	overlaps &= w1 == 0 ? is_top_or_left(v2, v3) : w1 > 0;
+	overlaps &= w2 == 0 ? is_top_or_left(v3, v1) : w2 > 0;
+	overlaps &= w3 == 0 ? is_top_or_left(v1, v2) : w3 > 0;
+
+	if (overlaps) {
+		// the point overlaps triangle
+
 		w1 /= area;
 		w2 /= area;
 		w3 /= area;
@@ -222,9 +247,10 @@ bool is_in_triangle(Vector2 p, Vector2 v1, Vector2 v2, Vector2 v3, Vector3& bary
 
 template<typename U>
 void rasterize(
-	Canvas canvas, 
-	const std::vector<Vector3>& vertices, 
+	Canvas canvas,
+	const std::vector<Vector3>& vertices,
 	const std::vector<TriangleIndices>& indices,
+	std::vector<std::vector<float>>& depth_buffer,
 	U uniforms,
 	const std::vector<StringAnyMap>& varying,
 	Interpolator interpolator,
@@ -238,19 +264,15 @@ void rasterize(
 		Vector3 v2 = vertices[triangle.v2];
 		Vector3 v3 = vertices[triangle.v3];
 
-		size_t zero = 0;
+		int bbmin_x = std::floor(std::min({ v1.x, v2.x, v3.x }));
+		int bbmin_y = std::floor(std::min({ v1.y, v2.y, v3.y }));
+		int bbmax_x = std::floor(std::max({ v1.x, v2.x, v3.x }));
+		int bbmax_y = std::floor(std::max({ v1.y, v2.y, v3.y }));
 
-		size_t bbmin_x = static_cast<size_t>(std::floor(std::min({ v1.x, v2.x, v3.x })));
-		bbmin_x = clamp(zero, canvas.width - 1, bbmin_x);
-
-		size_t bbmin_y = static_cast<size_t>(std::floor(std::min({ v1.y, v2.y, v3.y })));
-		bbmin_y = clamp(zero, canvas.height - 1, bbmin_y);
-
-		size_t bbmax_x = static_cast<size_t>(std::floor(std::max({ v1.x, v2.x, v3.x })));
-		bbmax_x = clamp(zero, canvas.width - 1, bbmax_x);
-
-		size_t bbmax_y = static_cast<size_t>(std::floor(std::max({ v1.y, v2.y, v3.y })));
-		bbmax_y = clamp(zero, canvas.height - 1, bbmax_y);
+		bbmin_x = clamp(0, static_cast<int>(canvas.width) - 1, bbmin_x);
+		bbmin_y = clamp(0, static_cast<int>(canvas.height) - 1, bbmin_y);
+		bbmax_x = clamp(0, static_cast<int>(canvas.width) - 1, bbmax_x);
+		bbmax_y = clamp(0, static_cast<int>(canvas.height) - 1, bbmax_y);
 
 		for (size_t x = bbmin_x; x <= bbmax_x; x++) {
 			for (size_t y = bbmin_y; y <= bbmax_y; y++) {
@@ -259,7 +281,16 @@ void rasterize(
 
 				Vector3 barycentric;
 
-				if (is_in_triangle({x_float, y_float}, v1.xy(), v2.xy(), v3.xy(), barycentric, true)) {
+				if (is_in_triangle({ x_float, y_float }, v1.xy(), v2.xy(), v3.xy(), barycentric, true)) {
+					float interpolated_z = 1 / interpolator.interpolate<float>(1 / v1.z, 1 / v2.z, 1 / v3.z, barycentric);
+
+					if (depth_buffer[x][y] < interpolated_z) {
+						// there is something in front of this fragment already
+						continue;
+					}
+
+					depth_buffer[x][y] = interpolated_z;
+
 					// transform varying
 					StringAnyMap interpolated_varying;
 
@@ -274,7 +305,7 @@ void rasterize(
 						std::any value_v2 = varying_v2.at(key);
 						std::any value_v3 = varying_v3.at(key);
 
-						std::any value = interpolator.interpolate(value_v1, value_v2, value_v3, barycentric);
+						std::any value = interpolator.interpolate<Color>(value_v1, value_v2, value_v3, barycentric);
 						interpolated_varying[item.first] = value;
 					}
 
@@ -331,6 +362,7 @@ void render(
 	Canvas canvas,
 	const std::vector<Vector3>& vertices,
 	const std::vector<TriangleIndices>& indices,
+	std::vector<std::vector<float>>& depth_buffer,
 	// const std::vector<A>& vertex_attributes,
 	U uniforms,
 	std::function<Vector4(Vector4, U, StringAnyMap&)> vertex_shader,
@@ -365,7 +397,7 @@ void render(
 	// render
 
 	if ((render_options & RenderOptions::RASTERIZE) == RenderOptions::RASTERIZE) {
-		rasterize(canvas, screen_space_vertices, indices, uniforms, varying, interpolator, fragment_shader);
+		rasterize(canvas, screen_space_vertices, indices, depth_buffer, uniforms, varying, interpolator, fragment_shader);
 	}
 
 	if ((render_options & RenderOptions::WIREFRAME) == RenderOptions::WIREFRAME) {
@@ -376,42 +408,34 @@ void render(
 struct Uniforms {
 	float time;
 	Matrix4 projection;
+	Vector3 position;
+	Color color;
+	float rotation_start;
 };
-
-struct Varying { };
 
 Vector4 vert(Vector4 vertex, Uniforms uniforms, StringAnyMap& varying) {
 	float time = uniforms.time;
+	float rs = uniforms.rotation_start;
 
 	Matrix4 model1 = {
 		1, 0, 0, 0,
-		0, cos(time / 2), -sin(time / 2), 0,
-		0, sin(time / 2), cos(time / 2), 0,
+		0, cos(rs + time / 2), -sin(rs + time / 2), 0,
+		0, sin(rs + time / 2), cos(rs + time / 2), 0,
 		0, 0, 0, 1
 	};
 
 	Matrix4 model2 = {
-		cos(time / 2), 0, sin(time / 2), 0,
-		0, 1, 0, 0,
-		-sin(time / 2), 0, cos(time / 2), -4,
+		cos(rs + time / 2), 0, sin(rs + time / 2), uniforms.position.x,
+		0, 1, 0, uniforms.position.y,
+		-sin(rs + time / 2), 0, cos(rs + time / 2), uniforms.position.z,
 		0, 0, 0, 1
 	};
-
-	if (vertex.x < 0) {
-		varying["color"] = Color(255, 0, 0);
-	}
-	else if (vertex.y < 0) {
-		varying["color"] = Color(0, 255, 0);
-	}
-	else {
-		varying["color"] = Color(0, 0, 255);
-	}
 
 	return uniforms.projection * (model2 * (model1 * vertex));
 }
 
 Color frag(Uniforms uniforms, const StringAnyMap& varying) {
-	return std::any_cast<Color>(varying.at("color"));
+	return uniforms.color;
 }
 
 void draw(void* buffer, int width, int height, float time) {
@@ -428,7 +452,7 @@ void draw(void* buffer, int width, int height, float time) {
 	//	{0, 1, 2}
 	//} };
 
-	
+
 	// Cube
 
 	std::vector<Vector3> vertices{ {
@@ -464,7 +488,7 @@ void draw(void* buffer, int width, int height, float time) {
 			{4, 5, 1},
 			{1, 0, 4}
 	} };
-	
+
 
 	float l = -2;
 	float r = 2;
@@ -474,16 +498,27 @@ void draw(void* buffer, int width, int height, float time) {
 	Matrix4 projection = {
 		2 / (r - l), 0, (r + l) / (r - l), 0,
 		0, 2 / (t - b), (t + b) / (t - b), 0,
-		0, 0, 0, 0,
+		0, 0, -1, 0,
 		0, 0, -1, 0
 	};
 
-	Uniforms uniforms = { time, projection };
+	Uniforms uniforms = { time, projection, {0, 0, -4}, Color(0, 0, 255), 0 };
 	Interpolator interpolator(true);
 
 	std::function<Vector4(Vector4, Uniforms, StringAnyMap&)> vertex_shader = &vert;
 	std::function<Color(Uniforms, const StringAnyMap&)> fragment_shader = &frag;
 
-	render(canvas, vertices, indices, uniforms, vertex_shader, fragment_shader, interpolator, 
+	constexpr float infinity = std::numeric_limits<float>::infinity();
+	std::vector<std::vector<float>> depth_buffer = std::vector(canvas.width, std::vector(canvas.height, infinity));
+
+	render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader, interpolator,
+		RenderOptions::RASTERIZE);
+
+	uniforms.position = { 0, 5 - time, -8 };
+	uniforms.color = Color(255, 0, 0);
+	uniforms.rotation_start = 1.3f;
+	uniforms.time = 2 * time;
+
+	render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader, interpolator,
 		RenderOptions::RASTERIZE);
 }

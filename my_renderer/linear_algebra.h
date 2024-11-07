@@ -48,6 +48,7 @@ struct Vector2 {
 
 	Vector2();
 	Vector2(std::initializer_list<float> list);
+	Vector2 operator-(Vector2 other);
 };
 
 struct Matrix4 {

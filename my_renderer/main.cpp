@@ -212,7 +212,7 @@ int main(int argc, char** argv) {
         }
 
         
-        float elapsed = std::chrono::duration_cast<milliseconds>(start - Clock::now()).count() / 1000.f;
+        float elapsed = std::chrono::duration_cast<milliseconds>(Clock::now() - start).count() / 1000.f;
         draw(pBits, win_width, 437, elapsed);
         InvalidateRect(hwnd, NULL, TRUE);
     }
