@@ -9,71 +9,150 @@
 #include <typeindex>
 #include <any>
 #include <limits>
+#include <exception>
 
 #include "linear_algebra.h"
 
-struct Color {
-	uint8_t red;
-	uint8_t green;
-	uint8_t blue;
+float interpolate(float a, float b, float c, Vector3 distribution) {
+	return distribution.x * a + distribution.y * b + distribution.z * c;
+}
 
-	Color(uint8_t red, uint8_t green, uint8_t blue) : red(red), green(green), blue(blue) {}
+template<typename T>
+T clamp(T min, T max, T value) {
+	return std::max(min, std::min(value, max));
+}
+
+struct Color {
+	float red;
+	float green;
+	float blue;
+
+	Color(float red, float green, float blue) : 
+		red(red), green(green), blue(blue) {}
+
+	bool is_valid() {
+		bool valid = true;
+
+		valid &= 0 <= red && red <= 1;
+		valid &= 0 <= green && green <= 1;
+		valid &= 0 <= blue && blue <= 1;
+
+		return valid;
+	}
 };
 
-using StringAnyMap = std::unordered_map<std::string, std::any>;
+Color operator+(Color a, Color b) {
+	float red = a.red + b.red;
+	float green = a.green + b.green;
+	float blue = a.blue + b.blue;
 
-struct Interpolator {
-	std::unordered_map <std::type_index, std::function<std::any(std::any, std::any, std::any, Vector3)>> map;
+	return Color(red, green, blue);
+}
 
-	Interpolator(bool default_values) {
-		if (default_values) {
-			map[typeid(Color)] = [](std::any a, std::any b, std::any c, Vector3 distribution) -> std::any {
-				Color a_color = std::any_cast<Color>(a);
-				Color b_color = std::any_cast<Color>(b);
-				Color c_color = std::any_cast<Color>(c);
+Color operator*(Color color, float multiplier) {
+	float red = color.red * multiplier;
+	float green = color.green * multiplier;
+	float blue = color.blue * multiplier;
 
-				uint8_t red = distribution.x * a_color.red + distribution.y * b_color.red + distribution.z * c_color.red;
-				uint8_t green = distribution.x * a_color.green + distribution.y * b_color.green + distribution.z * c_color.green;
-				uint8_t blue = distribution.x * a_color.blue + distribution.y * b_color.blue + distribution.z * c_color.blue;
+	return Color(red, green, blue);
+}
 
-				return Color(red, green, blue);
-				};
+Color operator*(float multiplier, Color color) {
+	return color * multiplier;
+}
 
-			map[typeid(float)] = [](std::any a, std::any b, std::any c, Vector3 distribution) -> std::any {
-				float a_float = std::any_cast<float>(a);
-				float b_float = std::any_cast<float>(b);
-				float c_float = std::any_cast<float>(c);
+Color operator/(Color color, float divisor) {
+	float red = color.red / divisor;
+	float green = color.green / divisor;
+	float blue = color.blue / divisor;
 
-				float value = distribution.x * a_float + distribution.y * b_float + distribution.z * c_float;
-				return value;
-				};
-		}
+	return Color(red, green, blue);
+}
+
+struct Varying {
+	std::any value = std::any();
+	std::function<Varying(Varying, Varying)> op_addition = std::function<Varying(Varying, Varying)>();
+	std::function<Varying(Varying, float)> op_multiplication_1 = std::function<Varying(Varying, float)>();
+	std::function<Varying(float, Varying)> op_multiplication_2 = std::function<Varying(float, Varying)>();
+	std::function<Varying(Varying, float)> op_division = std::function<Varying(Varying, float)>();
+
+	Varying() {}
+
+	template<typename T>
+	Varying(T value) :
+		value(value),
+		op_addition([](Varying a, Varying b) -> Varying{
+			return Varying(a.cast<T>() + b.cast<T>());
+		}),
+		op_multiplication_1([](Varying v, float multiplier) -> Varying {
+			return Varying(v.cast<T>() * multiplier);
+		}),
+		op_multiplication_2([](float multiplier, Varying v) -> Varying {
+			return Varying(multiplier * v.cast<T>());
+		}),
+		op_division([](Varying v, float divisor) -> Varying {
+			return Varying(v.cast<T>() / divisor);
+		})
+	{}
+
+	// copy
+	//Varying(const Varying& other) : 
+	//	value(other.value),
+	//	op_addition(other.op_addition),
+	//	op_multiplication_1(other.op_multiplication_1),
+	//	op_multiplication_2(other.op_multiplication_2),
+	//	op_division(other.op_division) 
+	//{};
+
+	//// move
+	//Varying(Varying&& other) noexcept : 
+	//	value(other.value),
+	//	op_addition(other.op_addition),
+	//	op_multiplication_1(other.op_multiplication_1),
+	//	op_multiplication_2(other.op_multiplication_2),
+	//	op_division(other.op_division)
+	//{}
+
+	template<typename T>
+	Varying& operator=(const T& other)
+	{
+		*this = Varying(other);
+		return *this;
 	}
 
 	template<typename T>
-	T interpolate(std::any a, std::any b, std::any c, Vector3 distribution) {
-		return std::any_cast<T>(
-			map.at(a.type())(a, b, c, distribution)
-		);
+	T cast() const {
+		return std::any_cast<T>(value);
 	}
+
+	//template<typename T>
+	//Varying& operator=(T&& other) { 
+	//	*this = Varying(other);
+	//	return *this;
+	//}
 };
 
-void matrix_vector_multiplication(float* matrix, float* vector) {
-	float out[4] = {};
-
-	for (size_t i = 0; i < 4; i++) {
-		float row_sum = 0;
-		for (int j = 0; j < 4; j++) {
-			row_sum += matrix[i * 4 + j] * vector[j];
-		}
-
-		out[i] = row_sum;
-	}
-
-	for (size_t i = 0; i < 4; i++) {
-		vector[i] = out[i];
-	}
+Varying operator+(const Varying a, const Varying b) {
+	return a.op_addition(a, b);
 }
+
+Varying operator*(const Varying value, float multiplier) {
+	return value.op_multiplication_1(value, multiplier);
+}
+
+Varying operator*(float multiplier, const Varying value) {
+	return value.op_multiplication_2(multiplier, value);
+}
+
+Varying operator/(const Varying value, float divisor) {
+	return value.op_division(value, divisor);
+}
+
+Varying interpolate(const Varying a, const Varying b, const Varying c, const Vector3 distribution) {
+	return distribution.x * a + distribution.y * b + distribution.z * c;
+}
+
+using StringVaryingMap = std::unordered_map<std::string, Varying>;
 
 struct TriangleIndices {
 	size_t v1 = 0;
@@ -89,10 +168,8 @@ struct TriangleIndices {
 	}
 };
 
-/// <summary>
-/// A buffer of BGR values.
-/// The size of the buffer is 3 * width * height.
-/// </summary>
+// A buffer of BGR values.
+// The size of the buffer is 3 * width * height.
 struct Canvas {
 	size_t width;
 	size_t height;
@@ -103,12 +180,21 @@ struct Canvas {
 	void set_pixel_color(size_t x, size_t y, Color color) const {
 		assert(buffer);
 
+		//if (!color.is_valid()) {
+		//	std::cout << color.red << " " << color.green << " " << color.blue << "\n";
+		//	throw std::logic_error("Color intended to be painted on canvas is invalid.");
+		//}
+
 		size_t index = ((height - 1 - y) * width + x) * 3;
 		uint8_t* pixel = buffer + index;
 
-		pixel[0] = color.blue;
-		pixel[1] = color.green;
-		pixel[2] = color.red;
+		uint8_t blue = static_cast<uint8_t>(std::roundf(color.blue * 255));
+		uint8_t green = static_cast<uint8_t>(std::roundf(color.green * 255));
+		uint8_t red = static_cast<uint8_t>(std::roundf(color.red * 255));
+
+		pixel[0] = blue;
+		pixel[1] = green;
+		pixel[2] = red;
 	}
 
 	void clear(Color color) const {
@@ -192,11 +278,6 @@ std::unordered_set<std::pair<size_t, size_t>, EdgeHasher> triangles_to_edges(con
 	return edges;
 }
 
-template<typename T>
-T clamp(T min, T max, T value) {
-	return std::max(min, std::min(value, max));
-}
-
 bool is_top_or_left(Vector2 a, Vector2 b) {
 	Vector2 ab = b - a;
 
@@ -252,22 +333,37 @@ void rasterize(
 	const std::vector<TriangleIndices>& indices,
 	std::vector<std::vector<float>>& depth_buffer,
 	U uniforms,
-	const std::vector<StringAnyMap>& varying,
-	Interpolator interpolator,
-	std::function<Color(U, const StringAnyMap&)> fragment_shader
+	std::vector<StringVaryingMap>& varying,
+	std::function<Color(U, const StringVaryingMap&)> fragment_shader
 ) {
 	assert(0 < canvas.width);
 	assert(0 < canvas.height);
+
+	std::vector<float> ooz;
+	// divide all varying values with z for perspective correct interpolation
+	for (size_t i = 0; i < vertices.size(); i++) {
+		for (auto& kv : varying[i]) {
+			Varying& value = kv.second;
+			value = value / vertices[i].z;
+		}
+
+		ooz.push_back(1 / vertices[i].z);
+	}
 
 	for (const TriangleIndices& triangle : indices) {
 		Vector3 v1 = vertices[triangle.v1];
 		Vector3 v2 = vertices[triangle.v2];
 		Vector3 v3 = vertices[triangle.v3];
 
-		int bbmin_x = std::floor(std::min({ v1.x, v2.x, v3.x }));
-		int bbmin_y = std::floor(std::min({ v1.y, v2.y, v3.y }));
-		int bbmax_x = std::floor(std::max({ v1.x, v2.x, v3.x }));
-		int bbmax_y = std::floor(std::max({ v1.y, v2.y, v3.y }));
+		float bbmin_x_float = std::floor(std::min({ v1.x, v2.x, v3.x }));
+		float bbmin_y_float = std::floor(std::min({ v1.y, v2.y, v3.y }));
+		float bbmax_x_float = std::floor(std::max({ v1.x, v2.x, v3.x }));
+		float bbmax_y_float = std::floor(std::max({ v1.y, v2.y, v3.y }));
+
+		int bbmin_x = static_cast<int>(bbmin_x_float);
+		int bbmin_y = static_cast<int>(bbmin_y_float);
+		int bbmax_x = static_cast<int>(bbmax_x_float);
+		int bbmax_y = static_cast<int>(bbmax_y_float);
 
 		bbmin_x = clamp(0, static_cast<int>(canvas.width) - 1, bbmin_x);
 		bbmin_y = clamp(0, static_cast<int>(canvas.height) - 1, bbmin_y);
@@ -282,31 +378,50 @@ void rasterize(
 				Vector3 barycentric;
 
 				if (is_in_triangle({ x_float, y_float }, v1.xy(), v2.xy(), v3.xy(), barycentric, true)) {
-					float interpolated_z = 1 / interpolator.interpolate<float>(1 / v1.z, 1 / v2.z, 1 / v3.z, barycentric);
+					float interpolated_z = 1 / interpolate(
+						ooz[triangle.v1], 
+						ooz[triangle.v2], 
+						ooz[triangle.v3], 
+						barycentric
+					);
 
 					if (depth_buffer[x][y] < interpolated_z) {
 						// there is something in front of this fragment already
 						continue;
 					}
 
+					// this fragment is in front
 					depth_buffer[x][y] = interpolated_z;
 
-					// transform varying
-					StringAnyMap interpolated_varying;
+					// transform varying values
+					StringVaryingMap interpolated_varying;
 
-					StringAnyMap varying_v1 = varying[triangle.v1];
-					StringAnyMap varying_v2 = varying[triangle.v2];
-					StringAnyMap varying_v3 = varying[triangle.v3];
+					StringVaryingMap varying_v1 = varying[triangle.v1];
+					StringVaryingMap varying_v2 = varying[triangle.v2];
+					StringVaryingMap varying_v3 = varying[triangle.v3];
 
-					for (auto const& item : varying_v1) {
-						std::string key = item.first;
+					// iterate and combine varying values
+					for (auto const& kv : varying_v1) {
+						std::string key = kv.first;
 
-						std::any value_v1 = item.second;
-						std::any value_v2 = varying_v2.at(key);
-						std::any value_v3 = varying_v3.at(key);
+						Varying value_v1 = kv.second;
+						Varying value_v2 = varying_v2.at(key);
+						Varying value_v3 = varying_v3.at(key);
 
-						std::any value = interpolator.interpolate<Color>(value_v1, value_v2, value_v3, barycentric);
-						interpolated_varying[item.first] = value;
+						Color a_color = value_v1.cast<Color>();
+						Color b_color = value_v2.cast<Color>();
+						Color c_color = value_v3.cast<Color>();
+
+						// std::cout << barycentric.x + barycentric.y + barycentric.z << "\n";
+
+						// multiply with interpolated_z for perspective correct interpolation 
+						// (the division with z-values was done above before the rasterization loop)
+						Varying value = interpolated_z * interpolate(value_v1, value_v2, value_v3, barycentric);
+						interpolated_varying[key] = value;
+
+						Color c = value.cast<Color>();
+
+						// std::cout << c.red << " " << c.green << " " << c.blue << "\n";
 					}
 
 					// execute fragment shader
@@ -337,7 +452,7 @@ void draw_wireframe(Canvas canvas, const std::vector<Vector3>& vertices, const s
 			start_y_int,
 			end_x_int,
 			end_y_int,
-			Color(255, 0, 0)
+			Color(1, 0, 0)
 		);
 	}
 }
@@ -365,18 +480,17 @@ void render(
 	std::vector<std::vector<float>>& depth_buffer,
 	// const std::vector<A>& vertex_attributes,
 	U uniforms,
-	std::function<Vector4(Vector4, U, StringAnyMap&)> vertex_shader,
-	std::function<Color(U, const StringAnyMap&)> fragment_shader,
-	Interpolator interpolator,
+	std::function<Vector4(Vector4, U, StringVaryingMap&)> vertex_shader,
+	std::function<Color(U, const StringVaryingMap&)> fragment_shader,
 	RenderOptions render_options
 ) {
 	// execute vertex shader
 
 	std::vector<Vector4> processed_vertices;
-	std::vector<StringAnyMap> varying;
+	std::vector<StringVaryingMap> varying;
 
 	for (const Vector3& vertex : vertices) {
-		StringAnyMap map;
+		StringVaryingMap map;
 		Vector4 processed_vertex = vertex_shader(vertex.extend(1), uniforms, map);
 
 		processed_vertices.push_back(processed_vertex);
@@ -397,7 +511,7 @@ void render(
 	// render
 
 	if ((render_options & RenderOptions::RASTERIZE) == RenderOptions::RASTERIZE) {
-		rasterize(canvas, screen_space_vertices, indices, depth_buffer, uniforms, varying, interpolator, fragment_shader);
+		rasterize(canvas, screen_space_vertices, indices, depth_buffer, uniforms, varying, fragment_shader);
 	}
 
 	if ((render_options & RenderOptions::WIREFRAME) == RenderOptions::WIREFRAME) {
@@ -413,7 +527,7 @@ struct Uniforms {
 	float rotation_start;
 };
 
-Vector4 vert(Vector4 vertex, Uniforms uniforms, StringAnyMap& varying) {
+Vector4 vert(Vector4 vertex, Uniforms uniforms, StringVaryingMap& varying) {
 	float time = uniforms.time;
 	float rs = uniforms.rotation_start;
 
@@ -431,11 +545,29 @@ Vector4 vert(Vector4 vertex, Uniforms uniforms, StringAnyMap& varying) {
 		0, 0, 0, 1
 	};
 
-	return uniforms.projection * (model2 * (model1 * vertex));
+	Matrix4 model3 = {
+	1, 0, 0, uniforms.position.x,
+	0, 1, 0, uniforms.position.y,
+	0, 0, 1, uniforms.position.z,
+	0, 0, 0, 1
+	};
+
+	Vector4 world_space_vertex = model2 * (model1 * vertex);
+
+	if (world_space_vertex.y < 0) {
+		varying["color"] = Color(0, 0, 1);
+	}
+	else {
+		varying["color"] = Color(1, 0, 0);
+	}
+
+	return uniforms.projection * world_space_vertex;
 }
 
-Color frag(Uniforms uniforms, const StringAnyMap& varying) {
-	return uniforms.color;
+Color frag(Uniforms uniforms, const StringVaryingMap& varying) {
+	return varying.at("color").cast<Color>();
+
+	// return Color(1, 0, 0);
 }
 
 void draw(void* buffer, int width, int height, float time) {
@@ -502,23 +634,22 @@ void draw(void* buffer, int width, int height, float time) {
 		0, 0, -1, 0
 	};
 
-	Uniforms uniforms = { time, projection, {0, 0, -4}, Color(0, 0, 255), 0 };
-	Interpolator interpolator(true);
+	Uniforms uniforms = { time, projection, {0,  2 * sin(time / 2), -4}, Color(0, 0, 1), 0};
 
-	std::function<Vector4(Vector4, Uniforms, StringAnyMap&)> vertex_shader = &vert;
-	std::function<Color(Uniforms, const StringAnyMap&)> fragment_shader = &frag;
+	std::function<Vector4(Vector4, Uniforms, StringVaryingMap&)> vertex_shader = &vert;
+	std::function<Color(Uniforms, const StringVaryingMap&)> fragment_shader = &frag;
 
 	constexpr float infinity = std::numeric_limits<float>::infinity();
 	std::vector<std::vector<float>> depth_buffer = std::vector(canvas.width, std::vector(canvas.height, infinity));
 
-	render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader, interpolator,
+	render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader,
 		RenderOptions::RASTERIZE);
 
-	uniforms.position = { 0, 5 - time, -8 };
-	uniforms.color = Color(255, 0, 0);
-	uniforms.rotation_start = 1.3f;
-	uniforms.time = 2 * time;
+	//uniforms.position = { 0, 5 - time, -8 };
+	//uniforms.color = Color(1, 0, 0);
+	//uniforms.rotation_start = 1.3f;
+	//uniforms.time = 2 * time;
 
-	render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader, interpolator,
-		RenderOptions::RASTERIZE);
+	//render(canvas, vertices, indices, depth_buffer, uniforms, vertex_shader, fragment_shader,
+	//	RenderOptions::RASTERIZE);
 }
